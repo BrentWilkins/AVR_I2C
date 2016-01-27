@@ -1,7 +1,10 @@
-#include <util/delay.h> // TODO: Remove this debug
+#include <Arduino.h>
 #include "avr_i2c.h"
+#include "utility/twi.h"
 
 #define BUFFER_LENGTH 32
+#define SUCCESS 0
+#define ERROR 1
 
 typedef struct
 {
@@ -11,31 +14,14 @@ typedef struct
   uint8_t address;
 } buffer;
 
-// rxAddress shouldn't be used in master mode
+// rxAddress shouldn't be used.
 static buffer rxBuffer = { .index = 0, .length = 0, .address = 0 };
 static buffer txBuffer = { .index = 0, .length = 0, .address = 0 };
 
 static uint8_t transmitting = 0;
 
-uint8_t avr_i2c_endTransmission(bool sendStop);
-size_t  avr_i2c_write_bytes(const uint8_t *data, size_t quantity);
 
-
-// TODO: Remove this debug flash?
-void flash(uint8_t times)
-{
-  // Writing a logic one to PINxn toggles the value of PORTxn,
-  int i;
-  for(i = 0; i < times; ++i)
-  {
-    bitSet(PORTB, 5);
-    _delay_ms(200);
-    bitClear(PORTB, 5);
-    _delay_ms(200);
-  }
-}
-
-void avr_i2c_begin(void)  // Master only
+void avr_i2c_begin(void)  // Master device only
 {
   rxBuffer.index = 0;
   rxBuffer.length = 0;
@@ -46,53 +32,100 @@ void avr_i2c_begin(void)  // Master only
   twi_init();
 }
 
+
+
 void avr_i2c_end(void)
 {
   twi_disable();
 }
 
-void avr_i2c_beginTransmission(uint8_t slave_addr)
+
+
+static void avr_i2c_beginTransmission(uint8_t slave_addr)
 {
-  // indicate that we are transmitting
+  // Indicate that we are transmitting
   transmitting = 1;
-  // set address of targeted slave
+  // Set address of targeted slave
   txBuffer.address = slave_addr;
-  // reset tx buffer iterator vars
+  // Reset tx buffer iterator vars
   txBuffer.index = 0;
   txBuffer.length = 0;
 }
 
-size_t avr_i2c_write_byte(uint8_t data)
+
+
+// STOP is performed on the I2C bus
+static uint8_t avr_i2c_endTransmission(bool sendStop)
 {
-  if(transmitting)
+  // transmit buffer (blocking)
+  uint8_t ret = twi_writeTo(txBuffer.address, txBuffer.data,
+                            txBuffer.length, 1, sendStop);
+  // reset tx buffer iterator vars
+  txBuffer.index = 0;
+  txBuffer.length = 0;
+  // indicate that we are done transmitting
+  transmitting = 0;
+  return ret;
+}
+
+
+
+// Must be called in:
+// slave tx event callback
+// or after beginTransmission(address)
+static size_t avr_i2c_write_byte(uint8_t data)
+{
+  if (transmitting)
   {
-  // in master transmitter mode
-    // don't bother if buffer is full
-    if(txBuffer.length >= BUFFER_LENGTH){
-      //setWriteError();
-      return 0;
+    // In master transmitter mode don't bother if buffer is full
+    if(txBuffer.length >= BUFFER_LENGTH)
+    {
+      // Found in Print.h setWriteError();
+      return 0; // Length too long for buffer
     }
     // put byte in tx buffer
-    txBuffer.data[txBuffer.index] = data;
-    ++txBuffer.index;
+    txBuffer.data[txBuffer.index++] = data;
     // update amount in buffer   
     txBuffer.length = txBuffer.index;
   }
   else
-  {
-    // in slave send mode
+  { // in slave send mode
     // reply to master
     twi_transmit(&data, 1);
   }
-  return 1;
+
+  return txBuffer.length; // Success
 }
 
 
-/*
+
+// Must be called in:
+// slave tx event callback
+// or after beginTransmission(address)
+static size_t avr_i2c_write_bytes(const uint8_t *data, size_t quantity)
+{
+  if (transmitting)
+  { // in master transmitter mode
+    size_t i;
+    for(i = 0; i < quantity; ++i)
+    {
+      avr_i2c_write_byte(data[i]);
+    }
+  }
+  else
+  { // in slave send mode
+    // reply to master
+    twi_transmit(data, quantity);
+  }
+  return quantity;
+}
+
+
+
 int avr_i2c_write(unsigned char slave_addr, unsigned char reg_addr,
               unsigned char length, unsigned char const * data)
 {
-  int ret = 4; // Other error
+  int ret = ERROR;
   avr_i2c_beginTransmission(slave_addr);  // Initialize the Tx buffer
 
   if (avr_i2c_write_byte(reg_addr))
@@ -103,7 +136,7 @@ int avr_i2c_write(unsigned char slave_addr, unsigned char reg_addr,
       switch (avr_i2c_endTransmission(true))
       {
       case 0:
-        ret = 0;  // Success
+        ret = SUCCESS;
         break;
       case 1: // Data too long to fit in transmit buffer
         ret = 1;
@@ -118,42 +151,32 @@ int avr_i2c_write(unsigned char slave_addr, unsigned char reg_addr,
         ret = 4;
         break;
       default:
-        ret = 4;
+        ret = ERROR;
       }
     }
     else
     {
-      ret = 4;
+      ret = ERROR;
     }
   }
 
   return ret;
 }
-*/
 
-// STOP is performed on the I2C bus
-uint8_t avr_i2c_endTransmission(bool sendStop)
-{
-  // transmit buffer (blocking)
-  uint8_t ret = twi_writeTo(txBuffer.address, txBuffer.data,
-                            txBuffer.length, 1, sendStop);
-  // reset tx buffer iterator vars
-  txBuffer.index = 0;
-  txBuffer.length = 0;
-  // indicate that we are done transmitting
-  transmitting = 0;
-  return ret;
-}
+
 
 // TODO: Probably not compatible with newer boards like Due (internal registers)
-uint8_t avr_i2c_requestFrom(uint8_t address, uint8_t quantity, uint8_t sendStop)
+static uint8_t avr_i2c_requestFrom(uint8_t slave_addr, uint8_t length,
+                                   uint8_t sendStop)
 {
+  // TODO: Messing with this function when all broke 1/20/2016
   // clamp to buffer length
-  if(quantity > BUFFER_LENGTH){
-    quantity = BUFFER_LENGTH;
+  if(length > BUFFER_LENGTH){
+    length = BUFFER_LENGTH;
   }
+ 
   // perform blocking read into buffer
-  uint8_t read = twi_readFrom(address, rxBuffer.data, quantity, sendStop);
+  uint8_t read = twi_readFrom(slave_addr, rxBuffer.data, length, sendStop);
   // set rx buffer iterator vars
   rxBuffer.index = 0;
   rxBuffer.length = read;
@@ -162,37 +185,38 @@ uint8_t avr_i2c_requestFrom(uint8_t address, uint8_t quantity, uint8_t sendStop)
 }
 
 
-int avr_i2c_available(void)
+
+static int avr_i2c_available(void)
 {
   return rxBuffer.length - rxBuffer.index;
 }
 
-int avr_i2c_read_byte(void)
+static unsigned char avr_i2c_read_byte(void)
 {
-  int value = -1;
+  unsigned char value = 0xAA; // Junk value (magic!)
   
   // get each successive byte on each call
-  if(rxBuffer.index < rxBuffer.length)
-  {
-    value = rxBuffer.data[rxBuffer.index++];
+  if(rxBuffer.index < rxBuffer.length){
+    value = rxBuffer.data[rxBuffer.index];
+    ++rxBuffer.index;
   }
 
   return value;
 }
 
-/*
+
+// Returns the number of bytes read on success, -1 otherwise
 int avr_i2c_read(unsigned char slave_addr, unsigned char reg_addr,
                  unsigned char length, unsigned char *data)
 {
-  int ret = 4;  // Other error
+  int ret = -1; // Error
   avr_i2c_beginTransmission(slave_addr);  // Initialize the Tx buffer
   if (avr_i2c_write_byte(reg_addr))  // Put slave register address in Tx buff
   {
     if (avr_i2c_endTransmission(false))  // Send Tx, send restart to keep alive
     {
-      ret = 4;  // Error
+      ret = -1; // Error
     }
-    //else if (avr_i2c_requestFrom(slave_addr, length))
     else if (avr_i2c_requestFrom(slave_addr, length, (uint8_t)true))
     {
       unsigned char count = 0;
@@ -202,23 +226,19 @@ int avr_i2c_read(unsigned char slave_addr, unsigned char reg_addr,
       }
       if (count == length)
       {
-        ret = 0;  // Succcess
+        ret = length;  // Succcess
       }
       else
       {
-        ret = 4;  // Error
+        ret = -1;  // Error
       }
     }
     else
     {
-      ret = 4;  // Error
+      ret = -1;  // Error
     }
   }
-  else
-  {
-    //debug_println("Error: couldn't send slave register address");
-  }
+
   return ret;
 }
-*/
 
