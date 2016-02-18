@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include "avr_i2c.h"
-#include "utility/twi.h"
+#include "twi.h"
 
 #define BUFFER_LENGTH 32
 #define SUCCESS 0
@@ -205,10 +205,15 @@ static unsigned char avr_i2c_read_byte(void)
 }
 
 
-// Returns the number of bytes read on success, -1 otherwise
+// Returns zero on success, -1 otherwise
 int avr_i2c_read(unsigned char slave_addr, unsigned char reg_addr,
                  unsigned char length, unsigned char *data)
 {
+  if (!length)
+  {
+    return 0;
+  }
+
   int ret = -1; // Error
   avr_i2c_beginTransmission(slave_addr);  // Initialize the Tx buffer
   if (avr_i2c_write_byte(reg_addr))  // Put slave register address in Tx buff
@@ -226,7 +231,7 @@ int avr_i2c_read(unsigned char slave_addr, unsigned char reg_addr,
       }
       if (count == length)
       {
-        ret = length;  // Succcess
+        ret = SUCCESS;
       }
       else
       {

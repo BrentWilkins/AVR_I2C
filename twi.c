@@ -40,8 +40,8 @@
 
 static volatile uint8_t twi_state;
 static volatile uint8_t twi_slarw;
-static volatile uint8_t twi_sendStop;			// should the transaction end with a stop
-static volatile uint8_t twi_inRepStart;			// in the middle of a repeated start
+static volatile uint8_t twi_sendStop; // should the transaction end with a stop
+static volatile uint8_t twi_inRepStart; // in the middle of a repeated start
 
 static void (*twi_onSlaveTransmit)(void);
 static void (*twi_onSlaveReceive)(uint8_t*, int);
@@ -58,6 +58,7 @@ static uint8_t twi_rxBuffer[TWI_BUFFER_LENGTH];
 static volatile uint8_t twi_rxBufferIndex;
 
 static volatile uint8_t twi_error;
+
 
 /* 
  * Function twi_init
@@ -243,11 +244,13 @@ uint8_t twi_writeTo(uint8_t address, uint8_t* data, uint8_t length, uint8_t wait
   //
   if (true == twi_inRepStart) {
     // if we're in the repeated start state, then we've already sent the start,
-    // (@@@ we hope), and the TWI statemachine is just waiting for the address byte.
-    // We need to remove ourselves from the repeated start state before we enable interrupts,
-    // since the ISR is ASYNC, and we could get confused if we hit the ISR before cleaning
-    // up. Also, don't enable the START interrupt. There may be one pending from the 
-    // repeated start that we sent outselves, and that would really confuse things.
+    // (@@@ we hope), and the TWI statemachine is just waiting for the address
+    // byte.
+    // We need to remove ourselves from the repeated start state before we
+    // enable interrupts, since the ISR is ASYNC, and we could get confused if
+    // we hit the ISR before cleaning up. Also, don't enable the START
+    // interrupt. There may be one pending from the repeated start that we sent
+    // ourselves, and that would really confuse things.
     twi_inRepStart = false;			// remember, we're dealing with an ASYNC ISR
     do {
       TWDR = twi_slarw;				

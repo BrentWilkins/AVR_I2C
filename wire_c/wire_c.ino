@@ -1,7 +1,7 @@
 extern "C"
 {
   #include "avr_i2c.h"
-  #include "utility/twi.h"
+  #include "twi.h"
 };
 
 const uint8_t ADDRESS = 0x68;
